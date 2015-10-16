@@ -1,0 +1,184 @@
+#!/usr/bin/env python
+
+"""
+vt - a Vortex Tracking and diagnosis tool for WRF
+"""
+
+__version__ = '0.0.1'
+
+print 'vt-'+__version__
+
+import argparse
+import numpy
+from netCDF4 import Dataset
+import os
+from pylab import *
+import matplotlib.pyplot as plt
+import math
+
+parser = argparse.ArgumentParser()
+
+parser.add_argument('action',choices=['diagnose','relocate','cylindrical'],
+                    help="""action to perform: 
+    diagnose    - calculate vortex diagnostics for one or more WRF files
+                  and print to screen;
+    relocate    - perform vortex relocation from one WRF file to another;
+    cylindrical - convert to cylindrical coordinate system and output;
+""")
+parser.add_argument('file',help='WRF file(s) to perform actions on',nargs='+')
+parser.add_argument('-V','--version',action='store_true',\
+                    help='print version number and quit')
+
+args = parser.parse_args()
+
+input_files = args.file
+action = args.action
+
+if action == 'relocate':
+	if not len(input_files) == 2:
+		raise ValueError('Exactly 2 WRF files must be provided as arguments')
+
+if action == 'diagnose':
+        # Change to directory containing files 
+        wrfoutpath = '/home/disk/manta9/awsmith/umcm/umcm_output/ophelia/ao_vr3_ndgd01/'
+	os.chdir(wrfoutpath)
+        # Get variables from files
+        for i in input_files:
+		# for each file in input_files
+		file = Dataset(i,'r')
+		# variables for abs_vort, which is derived not given
+		cor = file.variables['F'][:,:,:]
+                # other variables (given)
+                gpb = file.variables['PHB'][:,:,:,:]
+                gpp = file.variables['PH'][:,:,:,:]
+                wnd_u = file.variables['U'][:,:,:,:]
+                wnd_v = file.variables['V'][:,:,:,:]
+		wnd_u10 = file.variables['U10'][:,:,:]
+                wnd_v10 = file.variables['V10'][:,:,:]
+                lon = file.variables['XLONG'][:,:,:]
+		lat = file.variables['XLAT'][:,:,:]
+                lonu = file.variables['XLONG_U'][:,:,:]
+                lonv = file.variables['XLONG_V'][:,:,:]
+                latu = file.variables['XLAT_U'][:,:,:]
+                latv = file.variables['XLAT_V'][:,:,:]
+                psfc = file.variables['PSFC'][:,:,:]
+                hgt = file.variables['HGT'][:,:,:]
+                # derive abs_vort on vert_levs 
+                r_earth = 6371000
+		num_vert_levs = 35
+		vert_levs = range(0, num_vert_levs)
+		grid_dx = 1333.33
+		grid_dy = 1333.33
+		abs_vort= numpy.zeros([num_vert_levs,len(lon[0,1,:]),len(lat[0,1,:])])
+		for l in range(0,num_vert_levs-1):
+			term1 = numpy.diff(wnd_v[0,l,:,:],1,0)/grid_dx		
+			term2 = numpy.diff(wnd_u[0,l,:,:],1,1)/grid_dy
+			term3 = cor[0,:,:]
+			abs_vort[l,:,:] = (term1-term2) + term3
+	        # derive abs_vort (at 10m)
+		abs_vort_10m = numpy.zeros([len(lon[0,1,:]), len(lat[0,1,:])])	
+			term1 = numpy.diff(wnd_v10[0,:,1:],1,0)/grid_dx
+			term2 = numpy.diff(wnd_u10[0,1:,:],1,1)/grid_dy
+			term3 = cor[0,1:,1:]
+			abs_vort_10m = (term1-term2) + term3	
+		# derive mslp
+                # note: this uses prescription for mslp from MM5/WRF vortex code, see /home/disk/manta11/milan/repos/umcm/WRFV3.7.1/share/
+                mslp = numpy.zeros([len(lonu[0,1,:])-1, len(latv[0,1,:])])
+                mslp = psfc + (11.38*hgt)                
+ 
+		# derive wind speed
+		wnd_spd = numpy.zeros([num_vert_levs, len(wnd_u[0,1,:,:]), len(wnd_v[0,1,:,:])-1])             
+		for m in xrange(0, len(dx)-1):
+			for n in xrange(0, len(dy)-1):
+				for l in vert_levs:
+					wnd_spd[l-1,m,n] = numpy.sqrt(((wnd_u[0,l-1,m,n+1])**2)+((wnd_v[0,l-1,m+1,n])**2))
+		
+		# define primary tracker variables
+		  850_vort = abs_vort[28,:,:]
+		  700_vort = abs_vort[22,:,:]
+		  10m_vort = abs_vort_10m
+		  850_gpht = (gpb[0,28,:,:]+gpp[0,28,:,:])/9.81
+		  700_gpht = (gpb[0,28,:,:]+gpp[0,28,:,:])/9.81
+		# define secondary tracker variables 
+                  wnd_spd_10m = numpy.sqrt(((wnd_u10)**2)+((wnd_v10)**2)) 
+		
+	        # func def uwin_ptdist: distance, dx and dy between any two points in the model domain
+		  dx = 0; dy = 0; dis = 0; # instantiation call
+		  def uwin_ptdist(ind1_x, ind1_y, ind2_x, ind2_y):
+			dx = 2*pi*r_earth*numpy.cos(((2*pi)/360)*lat[0,ind1_y,ind1_x])*((lon[0,ind2_y,ind2_x]-lon[0,ind1_y,ind1_x])/360)
+			dy = 2*pi*r_earth*((lat[0,ind2_y,ind2_x]-lat[0,ind1_y,ind1_x])/360)
+			dx = dx/1000; dy = dy/1000;
+			dis = numpy.sqrt((dx)**2 + (dy)**2)
+			return (dx,dy,dis)	# call [dx,dy,dis] = uwin_ptdist(args) to store
+		# below will have the iteration process for center-fixing algorithm for each vertical level
+			# if user wants only surface fix
+				# first guess is surface pressure minimum in our inner-most domain
+				  fg_surf_cfix = zip(*numpy.where(psfc[0,:,:] == numpy.min(psfc[0,:,:])))
+			          if verbose_flag == 1
+					print "surf_pmin: " + str(psfc[0,fg_surf_cfix[0][0],fg_surf_cfix[0][1]]/100) + " hPa"
+				# func def barnesGrid: establishes a new grid centered on a point extending out over a square of some maxdist
+				  def barnesGrid(ind_x,ind_y,maxdist):
+					cellsdistx = int(floor(maxdist/(grid_dx/1000)))
+					cellsdisty = int(floor(maxdist/(grid_dy/1000)))
+					bgrid_x = range((ind_x-cellsdistx),(ind_x+cellsdistx),1)
+					bgrid_y = range((ind_y-cellsdisty),(ind_y+cellsdisty),1)
+					bgrid_xs = bgrid_x[0]; bgrid_xe = bgrid_x[len(bgrid_x)-1];
+					bgrid_ys = bgrid_y[0]; bgrid_ye = bgrid_y[len(bgrid_y)-1];
+					return (bgrid_x,bgrid_y,bgrid_xs,bgrid_xe,bgrid_ys,bgrid_ye)
+				# note: for vis, contourf variable over domain grid, hold and contour the bgrid
+				  	[fg_x,fg_y,fg_xs,fg_xe,fg_ys,fg_ye] = barnesGrid(fg_surf_cfix[0][1],fg_surf_cfix[0][0],50)
+					while cfix_flag == 0
+				# func def barnesFunction: calculates the Barnes function, B(g), for the point g
+					re_fold = 60
+					wgt_fxn = numpy.zeros([len(fg_x), len(fg_y)])
+					bfxn = numpy.zeros([len(fg_x), len(fg_y)])
+					def barnesFunction(bgrid_x,bgrid_y,ind_x,ind_y,var,dims,l):
+						wgt_fxn = numpy.zeros([len(bgrid_x), len(bgrid_y)])
+                                                bfxn = numpy.zeros([len(bgrid_x), len(bgrid_y)])
+						for m in xrange(0,len(bgrid_x),1):
+							for n in xrange(0,len(bgrid_y),1):
+								[d_nx,d_ny,d_n] = uwin_ptdist(ind_x,ind_y,bgrid_x[m],bgrid_y[n])
+								wgt_fxn[n,m] = exp(-1*(d_n**2)/(re_fold**2))
+								if dims == '1d':	# y,x
+									bfxn[n,m] = (wgt_fxn[n,m]*var[bgrid_y[n],bgrid_x[m]])/(wgt_fxn[n,m])
+								elif dims == '2d':	# 1,y,x
+									bfxn[n,m] = (wgt_fxn[n,m]*var[0,bgrid_y[n],bgrid_x[m]])/(wgt_fxn[n,m])
+								elif dims == '3d':	# 1,z,y,x
+									bfxn[n,m] = (wgt_fxn[n,m]*var[0,l,bgrid_y[n],bgrid_x[m]])/(wgt_fxn[n,m])
+						return (wgt_fxn,bfxn)
+					sfc_fix_var_list = [gphp,abs_vort_10m,wnd_spd_10m]
+					bmaxdist_list = [40, 30, 20]
+					for k in range(0, len(sfc_fix_var_list)):
+						if k == 0:
+							ind_x1 = fg_surf_cfix[0][1]; ind_y1 = fg_surf_cfix[0][0];
+							[bgrid_x,bgrid_y,bgrid_xs,bgrid_xe,bgrid_ys,bgrid_ye] = barnesGrid(ind_x1,ind_y1,bmaxdist_list[k])
+							var = sfc_fix_var_list[k];
+							[wgt_fxn, bfxn] = barnesFunction(bgrid_x,bgrid_y,ind_x1,ind_y1,var,'3d',35)
+							tmp = zip(*numpy.where(bfxn[:,:] == numpy.max(bfxn[:,:])))
+							ind_x2 = tmp[0][1]; ind_y2 = tmp[0][0];
+						elif k == 1:
+							[bgrid_x,bgrid_y,bgrid_xs,bgrid_xe,bgrid_ys,bgrid_ye] = barnesGrid(ind_x2,ind_y2,bmaxdist_list[k])
+							var = sfc_fix_var_list[k];
+                                                        [wgt_fxn, bfxn] = barnesFunction(bgrid_x,bgrid_y,ind_x2,ind_y2,var,'1d',0)
+                                                        tmp = zip(*numpy.where(bfxn[:,:] == numpy.max(bfxn[:,:])))
+                                                        ind_x3 = tmp[0][1]; ind_y3 = tmp[0][0];
+						elif k == 2:
+							[bgrid_x,bgrid_y,bgrid_xs,bgrid_xe,bgrid_ys,bgrid_ye] = barnesGrid(ind_x3,ind_y3,bmaxdist_list[k])
+                                                        var = sfc_fix_var_list[k];
+							[wgt_fxn, bfxn] = barnesFunction(bgrid_x,bgrid_y,ind_x3,ind_y3,var,'2d',0)
+							tmp = zip(*numpy.where(bfxn[:,:] == numpy.min(bfxn[:,:])))
+                                                        ind_x4 = tmp[0][1]; ind_y4 = tmp[0][0];
+			# if user wants all levels
+			if surf_only_flag == 0 
+				for lev in vert_levs:
+					# until iteration process is complete, keep iterating the search
+					while cfix_flag == 0
+				
+		
+
+
+
+
+
+ 
+
