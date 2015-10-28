@@ -147,6 +147,10 @@ if action == 'diagnose':
 		os.chdir(wrfoutpath)
 		filect = len(input_files)
 		print '[vt_diagnose]: input_files contains ' + str(filect) + ' file(s).'
+		tmp = input_files;
+		input_files = {}
+		for k in range(0,len(tmp)):
+			input_files[k] = tmp[k];
 	elif all_flag == 1:
 		os.chdir(wrfoutpath)
 		input_files = {}
@@ -225,7 +229,7 @@ if action == 'diagnose':
 			FFIX[ct-1,l,0,0] = numpy.sum(FIXES[ct-1,l,1,0,0] + FIXES[ct-1,l,2,0,0] + (0.75*FIXES[ct-1,l,3,0,0]) + (0.5*FIXES[ct-1,l,4,0,0]) + (0.5*FIXES[ct-1,l,5,0,0]))/(3.75);
 		 	print '[vt_diagnose]: vortex center on level ' + str(l) + ' :' + str(FFIX[ct-1,l,0,0]) + 'N' + str(FFIX[ct-1,l,0,1]) + 'W'		
 		ct = ct + 1;
-		if ct < filect:			
+		if ct <= filect:			
 			print '[vt_diagnose]: moving on to input_file ' + str(ct) + ' of ' + str(filect)
 		else:
 			print '[vt_diagnose]: all input_files cycled. diagnose complete.'
