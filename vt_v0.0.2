@@ -12,9 +12,11 @@ print 'vt-'+__version__
 
 import argparse
 import numpy
+import scipy.interpolate
 from netCDF4 import Dataset
 import os
 import matplotlib.pyplot as plt
+import datetime
 
 parser = argparse.ArgumentParser()
 
@@ -27,21 +29,30 @@ parser.add_argument('action',choices=['diagnose','relocate','cylindrical'],
 """)
 parser.add_argument('file',help='WRF file(s) to perform actions on',nargs='+')
 parser.add_argument('-fsearch',help='Search for file(s) containing this string',nargs='+')
+parser.add_argument('-method',help='Specify either the default VT method or the vintage WRF/MM5 method',nargs=1)
 parser.add_argument('-v','--version',action='store_true',\
                     help='print version number and quit')
 
 args = parser.parse_args()
 input_files = args.file
+method_str = args.method
 
 action = args.action 
 
 verbose_flag = 0; # If 1, verbose; if 0, quiet
 all_flag = 0;	# If 1, all files containing a given retrieved, if 0, n/a
 surf_only_flag = 0;	# If 1, surf_only for diagnose; if 0, all levels
+method_flag = 0;    # If 0, VT method. If 1, WRF/MM5 method.
 
 if args.fsearch is not None:
 	srchstr = args.fsearch
 	all_flag = 1;
+if method_str[0][:] == 'vt':
+        method_flag = 0;
+        len_var_list = 5;
+elif method_str[0][:] == 'wrf':
+        method_flag = 1;
+        len_var_list = 1;
 
 if action == 'relocate':
 	if not len(input_files) == 2:
@@ -49,26 +60,59 @@ if action == 'relocate':
 
 if action == 'diagnose':
 	# Define/allow appropriate constants
-        DISTX = 0; DISTY = 0; DIST = 0; R_EARTH = 6371; PI = numpy.pi; VERT_LEVS = 35;	
-	# Define/allow appropriate functions
+        DISTX = 0; DISTY = 0; DIST = 0; R_EARTH = 6371; PI = numpy.pi; VERT_LEVS = 35; INTERP_LEVS = 40; ILEVELS = [1015,1010,1005] + range(1000,75,-25);
+        # Define/allow appropriate functions
+        def UWIN_VLINTERP(PATH,VARIABLE,SCOORDS,ECOORDS,ILEVELS):
+                os.chdir(PATH);		
+                if SCOORDS == 'eta':
+                    if ECOORDS == 'p':
+                        P_ETA = UWIN_GETWRFVAR(wrfoutpath, j ,'pres');
+                        X_OLD = numpy.squeeze(P_ETA);
+                        X_NEW = numpy.zeros((INTERP_LEVS,numpy.shape(X_OLD)[1],numpy.shape(X_OLD)[2]))
+                        for k in range(0, len(ILEVELS)):
+                            X_NEW[k,:,:] = ILEVELS[k];
+                        VAR = scipy.interpolate.interp1d(X_OLD[:,0,0],VARIABLE,axis=0,bounds_error=False,fill_value=var_fill_value)(X_NEW[:,0,0]);  
+                    #if ECOORDS == 'gpht':
+                    #    GPHT_ETA = UWIN_GETWRFVAR(wrfoutpath, j ,'gpht');
+                    #    GPHT_ETA = numpy.squeeze(GPHT_ETA);
+                    #    VART = scipy.interpolate.interp1d(GPHT_ETA[:,0,0],VARIABLE,axis=0);
+                    #    VAR = VART(ILEVELS);
+                    #if ECOORDS == 'dynht':
+                    #    DYHT_ETA = UWIN_GETWRFVAR(wrfoutpath, j ,'pres');
+                    #    DYHT_ETA = numpy.squeeze(DYHT_ETA);
+                    #    DYHT_ETA = numpy.multiply(100,DYHT_ETA);
+                    #    DYHT_ETA = numpy.multiply(-0.080265,DYHT_ETA);
+                    #    VAR = scipy.interpolate.interp1d(DYHT_ETA[:,0,0],VARIABLE,axis=0);
+                    #    VAR = VART(ILEVELS);
+                return VAR
+
 	def UWIN_GETWRFVAR(PATH,FILENAME,VARIABLE):
         	os.chdir(PATH);
         	FILE = Dataset(FILENAME,'r');
         	if VARIABLE == 'pres':
-                	VERT_LEVS = 35;
+                	VERT_LEVS = 35; #VERT_LEVS = 43;
                 	PB = FILE.variables['PB'][:,:,:,:]/100;
                 	PP = FILE.variables['P'][:,:,:,:]/100;
                 	VAR = numpy.zeros((VERT_LEVS, len(PP[0,1,:,1]), len(PP[0,1,1,:])))
                 	VAR = (PB + PP) # hPa
-        	elif VARIABLE == 'gpht':
-                	VERT_LEVS = 35;
+                elif VARIABLE == 'psfc':
+                        PSFC = FILE.variables['PSFC'][:,:,:]
+                        VAR = PSFC
+                elif VARIABLE == 'qsfc':
+                        QSFC = FILE.variables['Q2'][:,:,:]
+                        VAR = QSFC        	
+                elif VARIABLE == 'gpht':
+                	VERT_LEVS = 36; #VERT_LEVS = 44;
                 	GPB = FILE.variables['PHB'][:,:,:,:]
                 	GPP = FILE.variables['PH'][:,:,:,:]
-                	VAR = numpy.zeros((VERT_LEVS, len(GPP[0,1,:,1]), len(GPP[0,1,1,:])))
-                	VAR = (GPB + GPP)/9.81 # m
+                	GZ = numpy.zeros((VERT_LEVS, len(GPP[0,1,:,1]), len(GPP[0,1,1,:])))
+                	GZ = numpy.multiply(0.1019367992, numpy.add(GPB,GPP)) # m .. 1/9.81 = 0.1019..
+			GZ = numpy.squeeze(GZ);
+			TMP = 0.5*(GZ[0:VERT_LEVS-1:1,:,:] + GZ[1:VERT_LEVS:1,:,:])
+			VAR = numpy.squeeze(TMP);
 		elif VARIABLE == 'vort':
                 	DX = FILE.DX; DY = FILE.DY;
-                	VERT_LEVS = 35;
+                	VERT_LEVS = 35; #VERT_LEVS = 43;
                 	U = FILE.variables['U'][:,:,:,:]
                 	V = FILE.variables['V'][:,:,:,:]
                 	LONU = FILE.variables['XLONG_U'][:,:,:]
@@ -88,11 +132,11 @@ if action == 'diagnose':
                 	VAR = numpy.zeros((len(LAT[0,:,1])-1,len(LON[0,1,:])-1))
                 	VAR = ((numpy.diff(V10[0,:,1:],1,0)/DX) - (numpy.diff(U10[0,1:,:],1,1)/DY)) + COR[0,1:,1:]
         	elif VARIABLE == 'q':
-                	VERT_LEVS = 35;
+                	VERT_LEVS = 35; #VERT_LEVS = 43;
                 	QV = FILE.variables['QVAPOR'][:,:,:,:]
                 	VAR = QV;
 		elif VARIABLE == 'wspd':
-                	VERT_LEVS = 35;
+                	VERT_LEVS = 35; #VERT_LEVS = 43;
                 	U = FILE.variables['U'][:,:,:,:]
                 	V = FILE.variables['V'][:,:,:,:]
                 	VAR = numpy.zeros((VERT_LEVS,len(U[0,1,:,:]),len(V[0,1,:,:])-1))
@@ -102,6 +146,13 @@ if action == 'diagnose':
                 	V10 = FILE.variables['V10'][:,:,:]
                 	VAR = numpy.zeros((len(U10[0,:,:]),len(V10[0,:,:])))
                 	VAR = numpy.sqrt((U10**2)+(V10**2))
+                elif VARIABLE == 'mslp':
+                        PSFC = FILE.variables['PSFC'][:,:,:]
+                        HGT = FILE.variables['HGT'][:,:,:]
+                        VAR = PSFC + (11.38*HGT)
+                elif VARIABLE == 'mu':
+                        MU = FILE.variables['MU'][:,:,:]
+                        VAR = MU;
         	return VAR
 
 	def UWIN_GETWRFLL(PATH,FILENAME):
@@ -141,98 +192,175 @@ if action == 'diagnose':
 		
 	# Specification of wrfout path
         ##wrfoutpath = '/home/disk/manta9/awsmith/umcm/umcm_output/ophelia/ao_vr3_ndgd01/'	
-        wrfoutpath = '/home/disk/manta13/nobackup/falko/WRF3.4/atl/wrf_1.3km/2010/earl/2010082700/gfs/ctrl/ctrl_intel/'
+        ##wrfoutpath = '/home/disk/manta13/nobackup/falko/WRF3.4/atl/wrf_1.3km/2010/earl/2010082700/gfs/ctrl/ctrl_intel/'
+	##wrfoutpath = '/home/disk/manta12/milan/umcm/output/fanapi/awo_2010091500_fnl_noDH_rrtmg/'
+	wrfoutpath = '/home/disk/manta9/awsmith/umcm/run/katrina_awo/'
+        ##wrfoutpath = '/home/disk/manta12/milan/umcm/output/isaac/awo_2012082612_gfs_noDH_rrtmg/'
+	##wrfoutpath = '/home/disk/manta13/ming/ccsout/katrina_wrfv3/'
 	# Search setup if called by user
 	if all_flag == 0:
 		os.chdir(wrfoutpath)
 		filect = len(input_files)
 		print '[vt_diagnose]: input_files contains ' + str(filect) + ' file(s).'
 		tmp = input_files;
-		input_files = {}
+		input_files_uns = {};
+                input_files = {};
 		for k in range(0,len(tmp)):
-			input_files[k] = tmp[k];
+			input_files_uns[k] = tmp[k];
+                datefile = str(input_files_uns[1][0:11]) + '%Y-%m-%d_%H:%M:%S';
+                input_files = sorted(input_files_uns, key=lambda x: datetime.datetime.strptime(x, datefile));
 	elif all_flag == 1:
 		os.chdir(wrfoutpath)
-		input_files = {}
+		input_files_uns = {};
+                input_files = {};
 		filect = 0
 		for i in os.listdir(wrfoutpath):
 			if srchstr[0] in i:
-				input_files[filect] = i
+				input_files_uns[filect] = i
 				filect = filect + 1
 		print '[vt_diagnose]: found ' + str(filect) + ' file(s).'
+                datefile = str(input_files_uns[1][0:11]) + '%Y-%m-%d_%H:%M:%S';
+                input_files_sort  = sorted(input_files_uns.values(), key=lambda x: datetime.datetime.strptime(x, datefile));
+                for k in range(0, len(input_files_sort)): 
+                    input_files[k+1] = input_files_sort[k];
 	if verbose_flag == 1:
 		print input_files
 	# For each file in input_files,
 	ct = 1;
-	len_var_list = 5;
-	FIXES = numpy.zeros((filect,VERT_LEVS, len_var_list + 1,1,2));
-	FFIX = numpy.zeros((filect,VERT_LEVS,1,2)); 
+	FIXES = numpy.zeros((filect,INTERP_LEVS, len_var_list + 1,1,2));
+	FFIX = numpy.zeros((filect,INTERP_LEVS,1,2)); 
 	for j in input_files.values(): 
 		# List of diagnostic variables (these to be gathered as needed, individually
-		var_list = {1:'pres', 2:'gpht', 3:'vort', 4:'wspd',5:'q'}
-		dis_list = {1: 50, 2: 25, 3: 12.5, 4: 6.25}
-		X_init = 165; Y_init = 165;
-		[LAT,LON] = UWIN_GETWRFLL(wrfoutpath,j);
-		print '[vt_diagnose]: current domain center :' + str(LAT[0,Y_init,X_init]) + ' N ,' + str(LON[0,Y_init,X_init]) + ' W'
-		POS = numpy.zeros((VERT_LEVS,len(var_list) + 1,1,2));
-		# Do surface diagnostics 
+                if surf_only_flag == 0:
+			var_list = {1:'pres', 2:'gpht', 3:'vort', 4:'wspd',5:'q'}
+                        print '[vt_diagnose]: surf_only flag off. will execute for all vertical levels.'
+                elif surf_only_flag == 1:
+                        #var_list = TBC.
+                        print '[vt_diagnose]: surf_only flag on. will execute for surface only.'
+                if method_flag == 0: 
+			dis_list = {1: 50, 2: 25, 3: 12.5, 4: 6.25}
+                        print '[vt_diagnose]: based on your input, execution will use VT default method.'
+                elif method_flag == 1:
+                        dis_list = {1: 50}
+                        var_list = {1:'gpht'}
+                        print '[vt_diagnose]: based on your input, execution will use WRF/MM5 method.'
 
+                [LAT,LON] = UWIN_GETWRFLL(wrfoutpath,j);
+		MSLP = UWIN_GETWRFVAR(wrfoutpath, j , 'mu');
+                FGFIX = UWIN_CFIND(MSLP[0,:,:],'min');
+                #X_init = round(numpy.multiply(0.5,numpy.shape(LON)[2]));
+                #Y_init = round(numpy.multiply(0.5,numpy.shape(LAT)[1]));
+                X_init = FGFIX[0][1]; 
+		Y_init = FGFIX[0][0];
+		print '[vt_diagnose]: current PERTURBATION DRY MASS IN COLUMN center :' + str(LAT[0,Y_init,X_init]) + ' N ,' + str(LON[0,Y_init,X_init]) + ' W'
+		POS = numpy.zeros((INTERP_LEVS,len(var_list) + 1,1,2));
+		# Do surface diagnostics 
+                        ## This section TBC.
 		# Do all-level diagnostics
-		for l in range(0, VERT_LEVS):
-			for k in var_list:
-				VAR = UWIN_GETWRFVAR(wrfoutpath, j ,var_list.values()[k-1]);
-                                VAR = numpy.squeeze(VAR);
-				# First guess: pressure-minimum. Execute IFF k == 1;
-				if k == 1:					
-					X = X_init; Y = Y_init;
-					POS[l,0,0,1] = X; POS[l,0,0,0] = Y;
-					[GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
-					CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'min');
-					POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; POS[l,k,0,0] = GRDY[CFIX[0][0],1];			
-					# Set X,Y for next variable
-					X = POS[l,k,0,1]; Y = POS[l,k,0,0];
-				if k == 2:
-					[GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
-					CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'max');
-					POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; POS[l,k,0,0] = GRDY[CFIX[0][0],1];	
-					# Set X,Y for next variable
-					X = POS[l,k,0,1]; Y = POS[l,k,0,0];					
-				if k == 3:
-					[GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
-					CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'max');
-					POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; POS[l,k,0,0] = GRDY[CFIX[0][0],1];
-					# Set X,Y for next variable
-					X = POS[l,k,0,1]; Y = POS[l,k,0,0];
-				if k == 4:
-					[GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
-					CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'min');
-					POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; POS[l,k,0,0] = GRDY[CFIX[0][0],1];
-					# Set X,Y for next variable
-					X = POS[l,k,0,1]; Y = POS[l,k,0,0];
-				if k == 5:
-					CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'max');
-					POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; POS[l,k,0,0] = GRDY[CFIX[0][0],1];
+                if method_flag == 0:
+		    for l in range(0, INTERP_LEVS):
+                        for k in var_list:
+			    VAR = UWIN_GETWRFVAR(wrfoutpath, j ,var_list.values()[k-1]);
+                            VAR = numpy.squeeze(VAR);
+                            var_fill_value = numpy.mean(numpy.mean(VAR[0,:,:]));
+                            #print numpy.shape(VAR) 
+                            VAR = UWIN_VLINTERP(wrfoutpath, VAR, 'eta', 'p', ILEVELS); 
+		            # First guess: pressure-minimum. Execute IFF k == 1;
+		            if k == 1:					
+			        X = X_init; 
+                                Y = Y_init;
+				POS[l,0,0,1] = X; 
+                                POS[l,0,0,0] = Y;
+			        [GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
+				CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'min');
+			        POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; 
+                                POS[l,k,0,0] = GRDY[CFIX[0][0],1];			
+			        # Set X,Y for next variable
+                                X = POS[l,k,0,1]; 
+                                Y = POS[l,k,0,0];
+			    if k == 2:
+			        [GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
+			        CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'max');
+		                POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; 
+                                POS[l,k,0,0] = GRDY[CFIX[0][0],1];	
+			        # Set X,Y for next variable
+			        X = POS[l,k,0,1];
+                                Y = POS[l,k,0,0];					
+			    if k == 3:
+			        [GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
+			        CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'max');
+			        POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; 
+                                POS[l,k,0,0] = GRDY[CFIX[0][0],1];
+			        # Set X,Y for next variable
+                                X = POS[l,k,0,1];
+                                Y = POS[l,k,0,0];
+			    if k == 4:
+			        [GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
+			        CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'min');
+			        POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; 
+                                POS[l,k,0,0] = GRDY[CFIX[0][0],1];
+			        # Set X,Y for next variable
+			        X = POS[l,k,0,1]; 
+                                Y = POS[l,k,0,0];
+			    if k == 5:
+			        CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'max');
+			        POS[l,k,0,1] = GRDX[1,CFIX[0][1]]; 
+                                POS[l,k,0,0] = GRDY[CFIX[0][0],1];
 					
-					X = None; Y = None;
-		# Convert to lat/lons
-		##FIXES = numpy.zeros((filect,VERT_LEVS, len(var_list) + 1,1,2)); 
-		for l in range(0, VERT_LEVS):
-			FIXES[ct-1,l,0,0,1] = LON[0,POS[l,0,0,0],POS[l,0,0,1]]; 
-			FIXES[ct-1,l,0,0,0] = LAT[0,POS[l,0,0,0],POS[l,0,0,1]];
-			for k in var_list:
-				FIXES[ct-1,l,k,0,1] = LON[0,POS[l,k,0,0],POS[l,k,0,1]];
-				FIXES[ct-1,l,k,0,0] = LAT[0,POS[l,k,0,0],POS[l,k,0,1]];
-		# Do spatial averaging as appropriate for the fixes
-		##FFIX = numpy.zeros((filect,VERT_LEVS,1,2));
-		for l in range(0, VERT_LEVS):
-			FFIX[ct-1,l,0,1] = numpy.sum(FIXES[ct-1,l,1,0,1] + FIXES[ct-1,l,2,0,1] + (0.75*FIXES[ct-1,l,3,0,1]) + (0.5*FIXES[ct-1,l,4,0,1]) + (0.5*FIXES[ct-1,l,5,0,1]))/(3.75);
-			FFIX[ct-1,l,0,0] = numpy.sum(FIXES[ct-1,l,1,0,0] + FIXES[ct-1,l,2,0,0] + (0.75*FIXES[ct-1,l,3,0,0]) + (0.5*FIXES[ct-1,l,4,0,0]) + (0.5*FIXES[ct-1,l,5,0,0]))/(3.75);
-		 	print '[vt_diagnose]: vortex center on level ' + str(l) + ' :' + str(FFIX[ct-1,l,0,0]) + 'N' + str(FFIX[ct-1,l,0,1]) + 'W'		
-		ct = ct + 1;
-		if ct <= filect:			
-			print '[vt_diagnose]: moving on to input_file ' + str(ct) + ' of ' + str(filect)
-		else:
-			print '[vt_diagnose]: all input_files cycled. diagnose complete.'
+			        X = None; 
+                                Y = None;
+
+                    for l in range(0, INTERP_LEVS):
+                        FIXES[ct-1,l,0,0,1] = LON[0,POS[l,0,0,0],POS[l,0,0,1]]; 
+                        FIXES[ct-1,l,0,0,0] = LAT[0,POS[l,0,0,0],POS[l,0,0,1]];
+                        for k in var_list:
+                            FIXES[ct-1,l,k,0,1] = LON[0,POS[l,k,0,0],POS[l,k,0,1]];
+                            FIXES[ct-1,l,k,0,0] = LAT[0,POS[l,k,0,0],POS[l,k,0,1]];
+                    for l in range(0, INTERP_LEVS):
+                        FFIX[ct-1,l,0,1] = numpy.sum(FIXES[ct-1,l,1,0,1] + FIXES[ct-1,l,2,0,1] + (0.75*FIXES[ct-1,l,3,0,1]) + (0.5*FIXES[ct-1,l,4,0,1]) + (0.5*FIXES[ct-1,l,5,0,1]))/(3.75);
+                        FFIX[ct-1,l,0,0] = numpy.sum(FIXES[ct-1,l,1,0,0] + FIXES[ct-1,l,2,0,0] + (0.75*FIXES[ct-1,l,3,0,0]) + (0.5*FIXES[ct-1,l,4,0,0]) + (0.5*FIXES[ct-1,l,5,0,0]))/(3.75);
+                        print '[vt_diagnose]: vortex center on level ' + str(l) + ' :' + str(FFIX[ct-1,l,0,0]) + ' N, ' + str(FFIX[ct-1,l,0,1]) + ' W'
+                    ct = ct + 1;
+                    if ct <= filect:
+                        print '[vt_diagnose]: moving on to input_file ' + str(ct) + ' of ' + str(filect)
+                    else:
+                        print '[vt_diagnose]: all input_files cycled. diagnose complete.' 
+                
+                elif method_flag == 1:
+                    for l in range(0, INTERP_LEVS):
+                        for k in var_list:
+                            VAR = UWIN_GETWRFVAR(wrfoutpath, j , var_list.values()[k-1]);
+                            VAR = numpy.squeeze(VAR);
+                            var_fill_value = numpy.mean(numpy.mean(VAR[0,:,:]));
+                            VAR = UWIN_VLINTERP(wrfoutpath, VAR, 'eta', 'p', ILEVELS);
+                            X = X_init;
+                            Y = Y_init;
+                            POS[l,0,0,1] = X;
+                            POS[l,0,0,0] = Y;
+                            [GRDX, GRDY] = UWIN_SRCHGRID(X,Y,dis_list[k])
+                            CFIX = UWIN_CFIND(VAR[l,GRDY,GRDX],'max');
+                            POS[l,k,0,1] = GRDX[1,CFIX[0][1]];
+                            POS[l,k,0,0] = GRDY[CFIX[0][0],1];
+ 
+                            X = None; 
+                            Y = None;
+
+                    for l in range(0, INTERP_LEVS):
+                        FIXES[ct-1,l,0,0,1] = LON[0,POS[l,0,0,0],POS[l,0,0,1]];
+                        FIXES[ct-1,l,0,0,0] = LAT[0,POS[l,0,0,0],POS[l,0,0,1]];
+                        for k in var_list:
+                            FIXES[ct-1,l,k,0,1] = LON[0,POS[l,k,0,0],POS[l,k,0,1]];
+                            FIXES[ct-1,l,k,0,0] = LAT[0,POS[l,k,0,0],POS[l,k,0,1]];
+                    for l in range(0, INTERP_LEVS):
+                        FFIX[ct-1,l,0,1] = FIXES[ct-1,l,1,0,1];
+                        FFIX[ct-1,l,0,0] = FIXES[ct-1,l,1,0,0];
+                        print '[vt_diagnose]: vortex center on level ' + str(l) + ' :' + str(FFIX[ct-1,l,0,0]) + ' N, ' + str(FFIX[ct-1,l,0,1]) + ' W'
+                    ct = ct + 1;
+                    if ct <= filect:
+                        print '[vt_diagnose]: moving on to input_file ' + str(ct) + ' of ' + str(filect)
+                    else:
+                        print '[vt_diagnose]: all input_files cycled. diagnose complete.'
+
 	##print 'FFIX...' + FFIX
         ##print '.......'
 	##print 'FIXES...' + FIXES
@@ -240,8 +368,9 @@ if action == 'diagnose':
 	# Diagnostic plotting
 	outpath = '/home/disk/manta9/awsmith/vt/' 
 	os.chdir(outpath)
-	numpy.save('all_fixes',FIXES)
-	numpy.save('ffixes',FFIX)			
+        tcstr = '_katrina'
+	numpy.save('all_fixes' + tcstr,FIXES)
+	numpy.save('ffixes' + tcstr,FFIX)			
 
 if action == 'cylindrical':
 	print 'not coded yet.'
