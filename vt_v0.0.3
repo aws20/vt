@@ -28,6 +28,7 @@ parser.add_argument('action',choices=['diagnose','relocate','cylindrical'],
     cylindrical - convert to cylindrical coordinate system and output;
 """)
 parser.add_argument('file',help='WRF file(s) to perform actions on',nargs='+')
+parser.add_argument('-path',help='Specify path of file(s)',nargs='+')
 parser.add_argument('-fsearch',help='Search for file(s) containing this string',nargs='+')
 parser.add_argument('-method',help='Specify either the default VT method or the vintage WRF/MM5 method',nargs=1)
 parser.add_argument('-v','--version',action='store_true',\
@@ -36,6 +37,7 @@ parser.add_argument('-v','--version',action='store_true',\
 args = parser.parse_args()
 input_files = args.file
 method_str = args.method
+path_str = args.path
 
 action = args.action 
 
@@ -43,6 +45,15 @@ verbose_flag = 0; # If 1, verbose; if 0, quiet
 all_flag = 0;	# If 1, all files containing a given retrieved, if 0, n/a
 surf_only_flag = 0;	# If 1, surf_only for diagnose; if 0, all levels
 method_flag = 0;    # If 0, VT method. If 1, WRF/MM5 method.
+
+if args.path is not None:
+        wrfoutpath = path_str[0][:];
+        os.chdir(wrfoutpath)
+        print '[vt_v0.0.3]: wrfoutpath specified as: ' + str(wrfoutpath)
+        
+elif args.path is None:
+        wrfoutpath = os.getcwd(); 
+        print '[vt_v0.0.3]: wrfoutpath specified as: ' + str(wrfoutpath)
 
 if args.fsearch is not None:
 	srchstr = args.fsearch
@@ -191,14 +202,6 @@ if action == 'diagnose':
 		elif WHICH == 'min':
 			C = zip(*numpy.where(VAR == numpy.min(VAR)));
 		return C
-		
-	# Specification of wrfout path
-        ##wrfoutpath = '/home/disk/manta9/awsmith/umcm/umcm_output/ophelia/ao_vr3_ndgd01/'	
-        ##wrfoutpath = '/home/disk/manta13/nobackup/falko/WRF3.4/atl/wrf_1.3km/2010/earl/2010082700/gfs/ctrl/ctrl_intel/'
-	##wrfoutpath = '/home/disk/manta12/milan/umcm/output/fanapi/awo_2010091500_fnl_noDH_rrtmg/'
-	wrfoutpath = '/home/disk/manta9/awsmith/umcm/run/katrina_awo/'
-        ##wrfoutpath = '/home/disk/manta12/milan/umcm/output/isaac/awo_2012082612_gfs_noDH_rrtmg/'
-	##wrfoutpath = '/home/disk/manta13/ming/ccsout/katrina_wrfv3/'
 	
         # Search setup if called by user
 	if all_flag == 0:
