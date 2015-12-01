@@ -43,7 +43,7 @@ action = args.action
 
 verbose_flag = 0; # If 1, verbose; if 0, quiet
 all_flag = 0;	# If 1, all files containing a given retrieved, if 0, n/a
-surf_only_flag = 0;	# If 1, surf_only for diagnose; if 0, all levels
+surf_only_flag = 1;	# If 1, surf_only for diagnose; if 0, all levels
 method_flag = 0;    # If 0, VT method. If 1, WRF/MM5 method.
 
 if args.path is not None:
@@ -287,7 +287,14 @@ if action == 'diagnose':
                             # Set X,Y for next variable
                             X = POSSFC[0,k,0,1];
                             Y = POSSFC[0,k,0,0];
-                            MCP[ct-1] = VAR[Y_init,X_init];
+                            MUVAR = UWIN_GETWRFVAR(wrfoutpath, j, 'mu');
+                            MCPVAR = UWIN_GETWRFVAR(wrfoutpath, j, 'mslp');
+                            MUVAR = numpy.squeeze(MUVAR);
+                            MCPVAR = numpy.squeeze(MCPVAR);
+                            MCPFIX = UWIN_CFIND(MUVAR[:,:],'min');
+                            MCP_X = MCPFIX[0][1]; 
+                            MCP_Y = MCPFIX[0][0]; 
+                            MCP[ct-1] = MCPVAR[MCP_Y,MCP_X];
                             MCP[ct-1] = numpy.multiply(0.01,MCP[ct-1]);
                             SFCW = UWIN_GETWRFVAR(wrfoutpath, j, 'sfc_wspd'); 
                             SFCW = numpy.squeeze(SFCW);
@@ -450,7 +457,7 @@ if action == 'diagnose':
 	# Diagnostic plotting
 	outpath = '/home/disk/manta9/awsmith/vt/' 
 	os.chdir(outpath)
-        tcstr = '_katrina_surf_v2'
+        tcstr = '_katrina_surf_testv'
 	numpy.save('all_fixes' + tcstr,FIXES)
 	numpy.save('ffixes' + tcstr,FFIX)
         if surf_only_flag == 1:			
